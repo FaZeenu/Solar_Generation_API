@@ -1,5 +1,6 @@
 const express = require("express");
 const createInstallationReadingRouter = require("./installation-readings");
+const { installationFilters, paginatedCollection } = require("./collection-query");
 
 // Scalar model fields are returned directly; foreign-key IDs link related resources.
 const resources = [
@@ -13,6 +14,9 @@ function createResourceRouter(prisma) {
     const router = express.Router();
     for (const resource of resources) {
         router.get(`/${resource.path}`, async (req, res) => {
+            if (resource.model === "solarInstallation") {
+                return res.json(await paginatedCollection(req, prisma.solarInstallation, installationFilters(req.query), { id: "asc" }));
+            }
             const rows = await prisma[resource.model].findMany({ orderBy: { id: "asc" } });
             res.json(rows);
         });
@@ -36,6 +40,10 @@ function createResourceRouter(prisma) {
         if (resource.child) {
             const child = resource.child;
             router.get(`/${resource.path}/:${resource.parameter}/${child.path}`, async (req, res) => {
+                if (child.model === "solarInstallation") {
+                    const where = { AND: [installationFilters(req.query), { substationId: res.locals.resource.id }] };
+                    return res.json(await paginatedCollection(req, prisma.solarInstallation, where, { id: "asc" }));
+                }
                 const rows = await prisma[child.model].findMany({
                     where: { [child.foreignKey]: res.locals.resource.id },
                     orderBy: { id: "asc" },

@@ -15,6 +15,7 @@ function createApp(prisma) {
     });
     // Express 5 forwards rejected async handlers here, keeping errors JSON.
     app.use((error, req, res, next) => {
+        if (error.status === 400) return res.status(400).json({ error: error.message });
         if (error.type === "entity.parse.failed") {
             return res.status(400).json({ error: "Malformed JSON body" });
         }

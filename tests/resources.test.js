@@ -30,8 +30,11 @@ test("core read API against the seeded database (read-only)", async t => {
             const expected = await prisma[resource.model].findMany({ orderBy: { id: "asc" } });
             assert.equal(expected.length, resource.count, "Run npm run seed against the development database first");
             const actual = await get(`/${resource.path}`);
-            assert.deepEqual(actual, expected);
-            collections[resource.path] = actual;
+            if (resource.path === "installations") {
+                assert.deepEqual(actual.data, expected.slice(0, 20));
+                assert.equal(actual.count, expected.length);
+            } else assert.deepEqual(actual, expected);
+            collections[resource.path] = expected;
         });
         await t.test(`GET /${resource.path}/:id returns an individual resource`, async () => {
             const row = collections[resource.path][0];
@@ -59,7 +62,10 @@ test("core read API against the seeded database (read-only)", async t => {
             for (const parent of collections[scope.parent]) {
                 const expected = collections[scope.child].filter(child => child[scope.foreignKey] === parent.id);
                 const actual = await get(`/${scope.parent}/${parent.id}/${scope.child}`);
-                assert.deepEqual(actual, expected);
+                if (scope.child === "installations") {
+                    assert.deepEqual(actual.data, expected);
+                    assert.equal(actual.count, expected.length);
+                } else assert.deepEqual(actual, expected);
             }
         });
         await t.test(`GET /${scope.parent}/:id/${scope.child} returns 404 for a missing parent`, async () => {

@@ -1,4 +1,5 @@
 const express = require("express");
+const { readingFilters, paginatedCollection } = require("./collection-query");
 
 function validateReading(body, installationId) {
     if (!body || typeof body !== "object" || Array.isArray(body)) return "A JSON object is required";
@@ -52,11 +53,8 @@ function createInstallationReadingRouter(prisma) {
     });
 
     router.get("/readings", async (req, res) => {
-        const readings = await prisma.generationReading.findMany({
-            where: { installationId: res.locals.resource.id },
-            orderBy: [{ timestamp: "asc" }, { id: "asc" }],
-        });
-        res.json(readings);
+        const { where, orderBy } = readingFilters(req.query, res.locals.resource.id);
+        res.json(await paginatedCollection(req, prisma.generationReading, where, orderBy));
     });
 
     router.post("/readings", async (req, res) => {

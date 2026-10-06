@@ -48,7 +48,15 @@ test("installation composite and reading API (transaction rolled back after test
                 await t.test("history contains only this installation's readings", async () => {
                     const expected = await tx.generationReading.findMany({ where: { installationId: installation.id }, orderBy: [{ timestamp: "asc" }, { id: "asc" }] });
                     assert.equal(expected.length, 672);
-                    assert.deepEqual((await request(`${path}/readings`)).body, json(expected));
+                    const received = [];
+                    let url = `${path}/readings`;
+                    while (url) {
+                        const { body } = await request(url);
+                        assert.equal(body.count, expected.length);
+                        received.push(...body.data);
+                        url = body.next;
+                    }
+                    assert.deepEqual(received, json(expected));
                 });
                 await t.test("individual reading is returned and wrong installation is rejected", async () => {
                     const reading = await tx.generationReading.findFirst({ where: { installationId: installation.id } });
@@ -97,7 +105,9 @@ test("installation composite and reading API (transaction rolled back after test
                 await t.test("empty installation has no last reading, empty history and composite latestReading null", async () => {
                     const emptyPath = `/installations/${empty.id}`;
                     await request(`${emptyPath}/last-known-reading`, 404);
-                    assert.deepEqual((await request(`${emptyPath}/readings`)).body, []);
+                    const history = (await request(`${emptyPath}/readings`)).body;
+                    assert.deepEqual(history.data, []);
+                    assert.equal(history.count, 0);
                     assert.equal((await request(`${emptyPath}/composite`)).body.latestReading, null);
                 });
                 await t.test("missing reading returns 404 and malformed IDs return 400", async () => {
