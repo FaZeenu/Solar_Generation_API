@@ -4,6 +4,7 @@ const createResourceRouter = require("./routes/resources");
 function createApp(prisma) {
     const app = express();
     app.locals.prisma = prisma;
+    app.use(express.json());
 
     app.get("/", (req, res) => {
         res.send("Solar Generation API is running");
@@ -14,6 +15,9 @@ function createApp(prisma) {
     });
     // Express 5 forwards rejected async handlers here, keeping errors JSON.
     app.use((error, req, res, next) => {
+        if (error.type === "entity.parse.failed") {
+            return res.status(400).json({ error: "Malformed JSON body" });
+        }
         console.error("API request failed:", error.message);
         res.status(500).json({ error: "Internal server error" });
     });

@@ -1,4 +1,5 @@
 const express = require("express");
+const createInstallationReadingRouter = require("./installation-readings");
 
 // Scalar model fields are returned directly; foreign-key IDs link related resources.
 const resources = [
@@ -43,6 +44,7 @@ function createResourceRouter(prisma) {
             });
         }
     }
+    router.use("/installations/:installationId", createInstallationReadingRouter(prisma));
     return router;
 }
 
