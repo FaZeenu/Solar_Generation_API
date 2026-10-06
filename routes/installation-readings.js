@@ -39,7 +39,7 @@ function createInstallationReadingRouter(prisma) {
                 readings: { orderBy: latestOrder, take: 1 },
             },
         });
-        if (!installation) return res.status(404).json({ error: "SolarInstallation not found" });
+        if (!installation) return res.apiError(404, "SolarInstallation not found");
         const { readings, ...resource } = installation;
         res.json({ ...resource, latestReading: readings[0] || null });
     });
@@ -48,7 +48,7 @@ function createInstallationReadingRouter(prisma) {
         const reading = await prisma.generationReading.findFirst({
             where: { installationId: res.locals.resource.id }, orderBy: latestOrder,
         });
-        if (!reading) return res.status(404).json({ error: "GenerationReading not found" });
+        if (!reading) return res.apiError(404, "GenerationReading not found");
         res.json(reading);
     });
 
@@ -60,7 +60,7 @@ function createInstallationReadingRouter(prisma) {
     router.post("/readings", async (req, res) => {
         const installationId = res.locals.resource.id;
         const error = validateReading(req.body, installationId);
-        if (error) return res.status(400).json({ error });
+        if (error) return res.apiError(400, error);
         const { timestamp, powerKw, energyKwh, voltage } = req.body;
         const reading = await prisma.generationReading.create({
             data: { installationId, timestamp: new Date(timestamp), powerKw, energyKwh, voltage },
@@ -72,12 +72,12 @@ function createInstallationReadingRouter(prisma) {
         const rawId = req.params.readingId;
         const id = Number(rawId);
         if (!/^[1-9]\d*$/.test(rawId) || !Number.isInteger(id) || id > 2147483647) {
-            return res.status(400).json({ error: "readingId must be a positive 32-bit integer" });
+            return res.apiError(400, "readingId must be a positive 32-bit integer");
         }
         const reading = await prisma.generationReading.findFirst({
             where: { id, installationId: res.locals.resource.id },
         });
-        if (!reading) return res.status(404).json({ error: "GenerationReading not found" });
+        if (!reading) return res.apiError(404, "GenerationReading not found");
         res.json(reading);
     });
     return router;

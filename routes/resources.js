@@ -25,10 +25,10 @@ function createResourceRouter(prisma) {
         router.param(resource.parameter, async (req, res, next, rawId) => {
             const id = Number(rawId);
             if (!/^[1-9]\d*$/.test(rawId) || !Number.isInteger(id) || id > 2147483647) {
-                return res.status(400).json({ error: `${resource.parameter} must be a positive 32-bit integer` });
+                return res.apiError(400, `${resource.parameter} must be a positive 32-bit integer`);
             }
             const row = await prisma[resource.model].findUnique({ where: { id } });
-            if (!row) return res.status(404).json({ error: `${resource.label} not found` });
+            if (!row) return res.apiError(404, `${resource.label} not found`);
             res.locals.resource = row;
             next();
         });

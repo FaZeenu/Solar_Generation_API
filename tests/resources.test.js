@@ -44,12 +44,12 @@ test("core read API against the seeded database (read-only)", async t => {
         await t.test(`GET /${resource.path}/:id returns 404 for a missing resource`, async () => {
             const missingId = collections[resource.path].at(-1).id + 1;
             const body = await get(`/${resource.path}/${missingId}`, 404);
-            assert.equal(typeof body.error, "string");
+            assert.equal(typeof body.detail, "string");
         });
         await t.test(`GET /${resource.path}/:id rejects malformed IDs`, async () => {
             for (const id of ["abc", "0", "-1", "1.5", "2147483648", "1e0", "1abc"]) {
                 const body = await get(`/${resource.path}/${id}`, 400);
-                assert.equal(typeof body.error, "string");
+                assert.equal(typeof body.detail, "string");
             }
         });
     }
@@ -71,11 +71,11 @@ test("core read API against the seeded database (read-only)", async t => {
         await t.test(`GET /${scope.parent}/:id/${scope.child} returns 404 for a missing parent`, async () => {
             const missingId = collections[scope.parent].at(-1).id + 1;
             const body = await get(`/${scope.parent}/${missingId}/${scope.child}`, 404);
-            assert.equal(typeof body.error, "string");
+            assert.equal(typeof body.detail, "string");
         });
     }
     await t.test("unknown routes return JSON 404", async () => {
-        assert.deepEqual(await get("/does-not-exist", 404), { error: "Route not found" });
+        assert.deepEqual(await get("/does-not-exist", 404), { code: "NOT_FOUND", message: "Resource not found", detail: "Route not found" });
     });
     await t.test("existing root response remains available", async () => {
         const response = await fetch(base);
