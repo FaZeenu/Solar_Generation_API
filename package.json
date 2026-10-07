@@ -5,6 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
+    "build": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
     "prisma:validate": "prisma validate",
     "prisma:generate": "prisma generate",
     "seed": "prisma db seed",
