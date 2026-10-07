@@ -97,6 +97,7 @@ for (const [path, name, pathId, childPath, childName] of [
 
 require("./installation-readings")({ schemas, parameters, responses, paths });
 require("./hierarchy-writes")({ schemas, parameters, responses, paths });
+const securitySchemes = require("./jwt-security")({ paths, responses });
 
 module.exports = {
     openapi: "3.0.3",
@@ -106,5 +107,5 @@ module.exports = {
         description: "A REST API for Sri Lankan solar installations, generation readings and geographic hierarchy.",
     },
     paths,
-    components: { schemas, parameters, responses },
+    components: { schemas, parameters, responses, securitySchemes },
 };

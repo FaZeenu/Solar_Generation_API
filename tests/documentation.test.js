@@ -81,6 +81,73 @@ test("minimal OpenAPI/Swagger infrastructure", async t => {
     });
 });
 
+test("OpenAPI JWT security contract", async t => {
+    await t.test("HTTP Bearer JWT scheme describes scopes and identity/jurisdiction claims", () => {
+        const scheme = document.components.securitySchemes.BearerAuth;
+        assert.equal(scheme.type, "http"); assert.equal(scheme.scheme, "bearer"); assert.equal(scheme.bearerFormat, "JWT");
+        for (const value of ["installation-write", "analyst-read-by-district", "hierarchy-admin", "installationId", "districtId", "sub", "exp"]) assert(scheme.description.includes(value));
+        assert(!scheme.flows); assert(!scheme.example);
+    });
+    await t.test("all 20 protected operations have Bearer requirements and shared 401/403 responses", () => {
+        let protectedCount = 0;
+        for (const [path, item] of Object.entries(document.paths)) {
+            for (const [method, operation] of Object.entries(item)) {
+                const ingestion = path === "/installations/{installationId}/readings" && method === "post";
+                const write = ["post", "patch", "delete"].includes(method);
+                const read = method === "get" && (path.startsWith("/installations") || path === "/substations/{substationId}/installations");
+                if (!write && !read) continue;
+                protectedCount++;
+                assert.deepEqual(operation.security, [{ BearerAuth: [] }]);
+                assert.equal(operation.responses[401].$ref, "#/components/responses/Unauthorized");
+                assert.equal(operation.responses[403].$ref, "#/components/responses/Forbidden");
+                assert.deepEqual(operation["x-required-scopes"], ingestion ? ["installation-write"] : write ? ["hierarchy-admin"] : ["analyst-read-by-district", "hierarchy-admin"]);
+                assert.equal(operation["x-scope-match"], "any");
+            }
+        }
+        assert.equal(protectedCount, 20);
+    });
+    await t.test("all eight public geographic GET operations remain public; summary remains absent", () => {
+        assert(!document.security);
+        let publicCount = 0;
+        for (const [path, item] of Object.entries(document.paths)) {
+            if (!item.get || path.startsWith("/installations") || path === "/substations/{substationId}/installations") continue;
+            publicCount++;
+            assert.deepEqual(item.get.security, []);
+            assert(!item.get.responses[401]); assert(!item.get.responses[403]);
+        }
+        assert.equal(publicCount, 8);
+        assert(!Object.keys(document.paths).some(path => path.includes("generation-summary")));
+    });
+    await t.test("401/403 examples reuse Error and include the real bearer challenge", () => {
+        for (const name of ["Unauthorized", "Forbidden"]) {
+            const media = document.components.responses[name].content["application/json"];
+            assert.equal(media.schema.$ref, "#/components/schemas/Error"); validate(media.example, media.schema);
+        }
+        assert.equal(document.components.responses.Unauthorized.headers["WWW-Authenticate"].example, 'Bearer realm="solar-generation"');
+    });
+});
+
+test("documented 401/403 responses and public access match the actual API", async t => {
+    const { token } = require("./helpers/auth");
+    const prisma = require("../prisma/client");
+    const installation = await prisma.solarInstallation.findFirst();
+    const server = createApp(prisma).listen(0, "127.0.0.1");
+    t.after(async () => { await new Promise(resolve => server.close(resolve)); await prisma.$disconnect(); });
+    await once(server, "listening");
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    const path = `/installations/${installation.id}`;
+    for (const headers of [{}, { Authorization: "Bearer invalid" }, { Authorization: `Bearer ${token({ scope: "hierarchy-admin" }, { expiresIn: -1 })}` }]) {
+        const response = await fetch(origin + path, { headers });
+        assert.equal(response.status, 401);
+        assert.equal(response.headers.get("www-authenticate"), document.components.responses.Unauthorized.headers["WWW-Authenticate"].example);
+        assert.deepEqual(await response.json(), document.components.responses.Unauthorized.content["application/json"].example);
+    }
+    const denied = await fetch(origin + path, { headers: { Authorization: `Bearer ${token({ scope: "installation-write", installationId: installation.id })}` } });
+    assert.equal(denied.status, 403);
+    assert.deepEqual(await denied.json(), document.components.responses.Forbidden.content["application/json"].example);
+    for (const publicPath of ["/provinces", "/districts", "/substations"]) assert.equal((await fetch(origin + publicPath)).status, 200);
+});
+
 test("OpenAPI hierarchy write contracts", async t => {
     for (const [path, name, pathId] of [
         ["provinces", "Province", "provinceId"], ["districts", "District", "districtId"],
@@ -119,8 +186,8 @@ test("OpenAPI hierarchy write contracts", async t => {
             }
         });
     }
-    await t.test("no security or summary documentation; readings remain append-only", () => {
-        assert(!document.security); assert(!document.components.securitySchemes);
+    await t.test("security documented, summary excluded; readings remain append-only", () => {
+        assert(!document.security); assert(document.components.securitySchemes.BearerAuth);
         assert(!Object.keys(document.paths).some(path => path.includes("generation-summary")));
         for (const [path, item] of Object.entries(document.paths)) {
             if (path.includes("readings")) { assert(!item.patch); assert(!item.delete); }
@@ -182,10 +249,10 @@ test("documented hierarchy writes match real responses with rollback-only resour
 });
 
 test("OpenAPI hierarchy GET contract", async t => {
-    await t.test("the 11 hierarchy GET operations remain; no security or summary", () => {
+    await t.test("the 11 hierarchy GET operations remain; summary excluded", () => {
         for (const path of expectedPaths) assert(document.paths[path].get);
         assert(!Object.keys(document.paths).some(path => path.includes("generation-summary")));
-        assert(!document.security); assert(!document.components.securitySchemes);
+        assert(!document.security); assert(document.components.securitySchemes.BearerAuth);
     });
     await t.test("path parameters are required, typed and complete", () => {
         for (const path of expectedPaths) {
@@ -273,7 +340,7 @@ test("OpenAPI installation readings contract", async t => {
             }
         }
         assert.deepEqual(Object.keys(document.paths[`${base}/readings`]), ["get", "post"]);
-        assert(!document.security); assert(!document.components.securitySchemes);
+        assert(!document.security); assert(document.components.securitySchemes.BearerAuth);
     });
     await t.test("history documents page/limit, inclusive from/to and timestamp sort", () => {
         const query = document.paths[`${base}/readings`].get.parameters.map(resolve).filter(parameter => parameter.in === "query");
