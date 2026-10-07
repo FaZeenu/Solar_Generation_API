@@ -1,6 +1,7 @@
 const express = require("express");
 const createInstallationReadingRouter = require("./installation-readings");
 const { installationFilters, paginatedCollection } = require("./collection-query");
+const registerHierarchyWrites = require("./hierarchy-writes");
 
 // Scalar model fields are returned directly; foreign-key IDs link related resources.
 const resources = [
@@ -36,6 +37,7 @@ function createResourceRouter(prisma) {
         router.get(`/${resource.path}/:${resource.parameter}`, (req, res) => {
             res.json(res.locals.resource);
         });
+        registerHierarchyWrites(router, prisma, resource);
 
         if (resource.child) {
             const child = resource.child;

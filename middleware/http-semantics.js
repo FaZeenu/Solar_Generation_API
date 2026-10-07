@@ -4,6 +4,7 @@ const errors = {
     400: ["BAD_REQUEST", "Bad request"],
     404: ["NOT_FOUND", "Resource not found"],
     406: ["NOT_ACCEPTABLE", "Not acceptable"],
+    409: ["CONFLICT", "Resource conflict"],
     412: ["PRECONDITION_FAILED", "Precondition failed"],
     413: ["PAYLOAD_TOO_LARGE", "Payload too large"],
     500: ["INTERNAL_SERVER_ERROR", "Internal server error"],
@@ -32,9 +33,13 @@ function requireIfMatch(req, res, etag, exists = true) {
     return false;
 }
 
+function representationEtag(body) {
+    return `"${createHash("sha256").update(JSON.stringify(body)).digest("hex")}"`;
+}
+
 function sendRepresentation(req, res, body, lastModified) {
     const serialized = JSON.stringify(body);
-    const etag = `"${createHash("sha256").update(serialized).digest("hex")}"`;
+    const etag = representationEtag(body);
     res.set("ETag", etag);
     res.set("Cache-Control", "no-cache");
     // Only callers with a real modification timestamp may supply this value.
@@ -78,4 +83,4 @@ function httpSemantics(req, res, next) {
     next();
 }
 
-module.exports = { httpSemantics, sendRepresentation, errorBody, ifMatchSatisfied, requireIfMatch };
+module.exports = { httpSemantics, sendRepresentation, errorBody, ifMatchSatisfied, requireIfMatch, representationEtag };
