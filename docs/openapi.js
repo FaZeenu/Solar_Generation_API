@@ -96,6 +96,7 @@ for (const [path, name, pathId, childPath, childName] of [
 }
 
 require("./installation-readings")({ schemas, parameters, responses, paths });
+require("./hierarchy-writes")({ schemas, parameters, responses, paths });
 
 module.exports = {
     openapi: "3.0.3",

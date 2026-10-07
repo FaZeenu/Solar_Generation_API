@@ -22,6 +22,7 @@ function validate(value, schema) {
     if (value === null && schema.nullable) return;
     if (schema.type === "object") {
         assert(value && typeof value === "object" && !Array.isArray(value));
+        if (schema.minProperties !== undefined) assert(Object.keys(value).length >= schema.minProperties);
         for (const key of schema.required || []) assert(Object.hasOwn(value, key), `Missing ${key}`);
         for (const [key, field] of Object.entries(value)) {
             if (schema.additionalProperties === false) assert(Object.hasOwn(schema.properties, key), `Unexpected ${key}`);
@@ -80,9 +81,109 @@ test("minimal OpenAPI/Swagger infrastructure", async t => {
     });
 });
 
+test("OpenAPI hierarchy write contracts", async t => {
+    for (const [path, name, pathId] of [
+        ["provinces", "Province", "provinceId"], ["districts", "District", "districtId"],
+        ["substations", "GridSubstation", "substationId"], ["installations", "SolarInstallation", "installationId"],
+    ]) {
+        await t.test(`${name} create/update schemas, headers and response codes match the implementation`, () => {
+            const post = document.paths[`/${path}`].post;
+            const patch = document.paths[`/${path}/{${pathId}}`].patch;
+            const remove = document.paths[`/${path}/{${pathId}}`].delete;
+            assert(post && patch && remove);
+            const create = document.components.schemas[`${name}Create`];
+            const update = document.components.schemas[`${name}Update`];
+            assert.deepEqual(create.required.sort(), Object.keys(create.properties).sort());
+            assert.equal(create.additionalProperties, false); assert.equal(update.additionalProperties, false);
+            assert.equal(update.minProperties, 1); assert(!update.required);
+            assert(!create.properties.id); assert(!update.properties.id);
+            for (const [operation, statuses] of [[post, [201, 400, 409, 406]], [patch, [200, 400, 404, 409, 412, 406]], [remove, [204, 400, 404, 409, 412, 406]]]) {
+                for (const status of statuses) assert(operation.responses[status]);
+                for (const response of Object.values(operation.responses)) {
+                    const resolved = resolve(response);
+                    if (resolved.content) {
+                        const media = resolved.content["application/json"];
+                        validate(media.example, media.schema);
+                    }
+                }
+            }
+            assert(post.requestBody.required); assert(patch.requestBody.required);
+            validate(create.example, create); validate(update.example, update);
+            assert(post.responses[201].headers.Location); assert(post.responses[201].headers.ETag);
+            assert(patch.responses[200].headers.ETag);
+            assert(!remove.responses[204].content); assert(!remove.requestBody);
+            for (const operation of [patch, remove]) {
+                const parameters = operation.parameters.map(resolve);
+                assert.equal(parameters[0].name, pathId); assert.equal(parameters[0].required, true);
+                assert.equal(parameters[1].name, "If-Match"); assert.equal(parameters[1].required, false);
+            }
+        });
+    }
+    await t.test("no security or summary documentation; readings remain append-only", () => {
+        assert(!document.security); assert(!document.components.securitySchemes);
+        assert(!Object.keys(document.paths).some(path => path.includes("generation-summary")));
+        for (const [path, item] of Object.entries(document.paths)) {
+            if (path.includes("readings")) { assert(!item.patch); assert(!item.delete); }
+        }
+        assert.match(document.components.schemas.GenerationReading.description, /Append-only/);
+    });
+});
+
+test("documented hierarchy writes match real responses with rollback-only resources", async t => {
+    const prisma = require("../prisma/client");
+    const rollback = new Error("Intentional write documentation rollback");
+    const models = ["province", "district", "gridSubstation", "solarInstallation", "generationReading", "user"];
+    const counts = () => Promise.all(models.map(model => prisma[model].count()));
+    const before = await counts();
+    try {
+        await prisma.$transaction(async tx => {
+            const server = createApp(tx).listen(0, "127.0.0.1");
+            try {
+                await once(server, "listening");
+                const origin = `http://127.0.0.1:${server.address().port}`;
+                const created = [];
+                for (const [path, name, pathId, parent] of [
+                    ["provinces", "Province", "provinceId"], ["districts", "District", "districtId", "provinceId"],
+                    ["substations", "GridSubstation", "substationId", "districtId"], ["installations", "SolarInstallation", "installationId", "substationId"],
+                ]) {
+                    const input = { ...document.components.schemas[`${name}Create`].example };
+                    if (parent) input[parent] = created.at(-1).body.id;
+                    const post = document.paths[`/${path}`].post;
+                    const response = await authenticatedFetch(`${origin}/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+                    assert.equal(response.status, 201);
+                    const body = await response.json(); validate(body, post.responses[201].content["application/json"].schema);
+                    const location = response.headers.get("location"); assert.equal(location, `/${path}/${body.id}`);
+                    const get = await authenticatedFetch(origin + location);
+                    assert.deepEqual(await get.json(), body); assert.equal(get.headers.get("etag"), response.headers.get("etag"));
+                    const patch = document.paths[`/${path}/{${pathId}}`].patch;
+                    const update = await authenticatedFetch(origin + location, { method: "PATCH", headers: { "Content-Type": "application/json", "If-Match": response.headers.get("etag") }, body: JSON.stringify(document.components.schemas[`${name}Update`].example) });
+                    assert.equal(update.status, 200);
+                    const updated = await update.json(); validate(updated, patch.responses[200].content["application/json"].schema);
+                    const stale = await authenticatedFetch(origin + location, { method: "DELETE", headers: { "If-Match": response.headers.get("etag") } });
+                    assert.equal(stale.status, 412); validate(await stale.json(), document.components.schemas.Error);
+                    created.push({ path, pathId, location, body: updated, etag: update.headers.get("etag") });
+                }
+                for (const resource of created.slice(0, 3)) {
+                    const denied = await authenticatedFetch(origin + resource.location, { method: "DELETE", headers: { "If-Match": resource.etag } });
+                    assert.equal(denied.status, 409); validate(await denied.json(), document.components.schemas.Error);
+                }
+                for (const resource of created.reverse()) {
+                    const response = await authenticatedFetch(origin + resource.location, { method: "DELETE", headers: { "If-Match": resource.etag } });
+                    assert.equal(response.status, 204); assert.equal(await response.text(), "");
+                }
+            } finally { await new Promise(resolve => server.close(resolve)); }
+            throw rollback;
+        }, { timeout: 60000 });
+    } catch (error) { if (error !== rollback) throw error; }
+    finally {
+        try { assert.deepEqual(await counts(), before); }
+        finally { await prisma.$disconnect(); }
+    }
+});
+
 test("OpenAPI hierarchy GET contract", async t => {
-    await t.test("the 11 hierarchy GET paths remain; no hierarchy writes, security or summary", () => {
-        for (const path of expectedPaths) assert.deepEqual(Object.keys(document.paths[path]), ["get"]);
+    await t.test("the 11 hierarchy GET operations remain; no security or summary", () => {
+        for (const path of expectedPaths) assert(document.paths[path].get);
         assert(!Object.keys(document.paths).some(path => path.includes("generation-summary")));
         assert(!document.security); assert(!document.components.securitySchemes);
     });
