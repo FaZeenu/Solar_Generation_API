@@ -1,3 +1,4 @@
+const { authenticatedFetch } = require("./helpers/auth");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { once } = require("node:events");
@@ -18,7 +19,7 @@ test("hierarchy writes and preconditions with temporary rollback-only resources"
                 await once(server, "listening");
                 const base = `http://127.0.0.1:${server.address().port}`;
                 async function request(path, method = "GET", body, status = 200, headers = {}) {
-                    const response = await fetch(base + path, {
+                    const response = await authenticatedFetch(base + path, {
                         method, headers: { "Content-Type": "application/json", ...headers },
                         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
                     });

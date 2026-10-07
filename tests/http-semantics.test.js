@@ -1,3 +1,4 @@
+const { authenticatedFetch } = require("./helpers/auth");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { once } = require("node:events");
@@ -17,7 +18,7 @@ test("HTTP semantics against seeded resources", async t => {
     t.after(async () => { await new Promise(resolve => server.close(resolve)); await prisma.$disconnect(); });
     await once(server, "listening");
     const base = `http://127.0.0.1:${server.address().port}`;
-    const get = (path, headers = {}) => fetch(base + path, { headers });
+    const get = (path, headers = {}) => authenticatedFetch(base + path, { headers });
     const installation = await prisma.solarInstallation.findFirst({ orderBy: { id: "asc" } });
     const district = await prisma.district.findUnique({ where: { id: (await prisma.gridSubstation.findUnique({ where: { id: installation.substationId } })).districtId } });
     const reading = await prisma.generationReading.findFirst({ where: { installationId: installation.id } });
@@ -79,7 +80,7 @@ test("HTTP semantics against seeded resources", async t => {
         assert.equal(ifMatchSatisfied(`"other", ${etag}`, etag), true);
     });
     await t.test("malformed JSON has a safe consistent error", async () => {
-        const response = await fetch(base + prefix + "/readings", { method: "POST", headers: { "Content-Type": "application/json" }, body: '{"password":"secret",' });
+        const response = await authenticatedFetch(base + prefix + "/readings", { method: "POST", headers: { "Content-Type": "application/json" }, body: '{"password":"secret",' });
         assert.equal(response.status, 400);
         const body = await response.json(); assertError(body, "BAD_REQUEST");
         assert(!JSON.stringify(body).includes("secret"));
@@ -96,15 +97,15 @@ test("Last-Modified and If-Modified-Since with reliable modification metadata", 
     t.after(() => new Promise(resolve => server.close(resolve)));
     await once(server, "listening");
     const url = `http://127.0.0.1:${server.address().port}/fixture`;
-    const first = await fetch(url);
+    const first = await authenticatedFetch(url);
     assert.equal(first.headers.get("last-modified"), "Wed, 01 Jan 2025 12:00:00 GMT");
-    const cached = await fetch(url, { headers: { "If-Modified-Since": first.headers.get("last-modified") } });
+    const cached = await authenticatedFetch(url, { headers: { "If-Modified-Since": first.headers.get("last-modified") } });
     assert.equal(cached.status, 304); assert.equal(await cached.text(), "");
     assert.equal(cached.headers.get("last-modified"), first.headers.get("last-modified"));
     for (const value of ["Tue, 31 Dec 2024 12:00:00 GMT", "invalid-date", "2025-01-02"]) {
-        assert.equal((await fetch(url, { headers: { "If-Modified-Since": value } })).status, 200);
+        assert.equal((await authenticatedFetch(url, { headers: { "If-Modified-Since": value } })).status, 200);
     }
-    assert.equal((await fetch(url, { headers: { "If-None-Match": '"nonmatching"', "If-Modified-Since": "Thu, 02 Jan 2025 12:00:00 GMT" } })).status, 200);
+    assert.equal((await authenticatedFetch(url, { headers: { "If-None-Match": '"nonmatching"', "If-Modified-Since": "Thu, 02 Jan 2025 12:00:00 GMT" } })).status, 200);
 });
 
 test("unexpected database failures do not expose implementation details", async t => {
@@ -112,7 +113,7 @@ test("unexpected database failures do not expose implementation details", async 
     const server = app.listen(0, "127.0.0.1");
     t.after(() => new Promise(resolve => server.close(resolve)));
     await once(server, "listening");
-    const response = await fetch(`http://127.0.0.1:${server.address().port}/provinces/1`);
+    const response = await authenticatedFetch(`http://127.0.0.1:${server.address().port}/provinces/1`);
     assert.equal(response.status, 500);
     const body = await response.json(); assertError(body, "INTERNAL_SERVER_ERROR");
     assert(!/Prisma|postgres|password|stack/.test(JSON.stringify(body)));

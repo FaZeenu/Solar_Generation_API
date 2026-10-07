@@ -1,3 +1,4 @@
+const { authenticatedFetch } = require("./helpers/auth");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { once } = require("node:events");
@@ -13,7 +14,7 @@ test("core read API against the seeded database (read-only)", async t => {
     await once(server, "listening");
     const base = `http://127.0.0.1:${server.address().port}`;
     async function get(path, status = 200) {
-        const response = await fetch(`${base}${path}`);
+        const response = await authenticatedFetch(`${base}${path}`);
         assert.equal(response.status, status, path);
         assert.match(response.headers.get("content-type"), /application\/json/);
         return response.json();
@@ -78,7 +79,7 @@ test("core read API against the seeded database (read-only)", async t => {
         assert.deepEqual(await get("/does-not-exist", 404), { code: "NOT_FOUND", message: "Resource not found", detail: "Route not found" });
     });
     await t.test("existing root response remains available", async () => {
-        const response = await fetch(base);
+        const response = await authenticatedFetch(base);
         assert.equal(response.status, 200);
         assert.equal(await response.text(), "Solar Generation API is running");
     });
@@ -95,7 +96,7 @@ test("a valid parent with no children returns an empty JSON collection", async t
     const server = createApp(client).listen(0, "127.0.0.1");
     t.after(() => new Promise(resolve => server.close(resolve)));
     await once(server, "listening");
-    const response = await fetch(`http://127.0.0.1:${server.address().port}/provinces/1/districts`);
+    const response = await authenticatedFetch(`http://127.0.0.1:${server.address().port}/provinces/1/districts`);
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), []);
 });

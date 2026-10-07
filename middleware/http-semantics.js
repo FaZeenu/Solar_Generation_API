@@ -2,6 +2,8 @@ const { createHash } = require("node:crypto");
 
 const errors = {
     400: ["BAD_REQUEST", "Bad request"],
+    401: ["UNAUTHORIZED", "Authentication required"],
+    403: ["FORBIDDEN", "Access forbidden"],
     404: ["NOT_FOUND", "Resource not found"],
     406: ["NOT_ACCEPTABLE", "Not acceptable"],
     409: ["CONFLICT", "Resource conflict"],
@@ -41,7 +43,7 @@ function sendRepresentation(req, res, body, lastModified) {
     const serialized = JSON.stringify(body);
     const etag = representationEtag(body);
     res.set("ETag", etag);
-    res.set("Cache-Control", "no-cache");
+    res.set("Cache-Control", req.auth ? "private, no-cache" : "no-cache");
     // Only callers with a real modification timestamp may supply this value.
     const modified = lastModified instanceof Date ? lastModified.getTime() : NaN;
     const hasModified = Number.isFinite(modified) && modified <= Date.now();

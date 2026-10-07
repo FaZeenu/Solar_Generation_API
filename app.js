@@ -1,12 +1,14 @@
 const express = require("express");
 const createResourceRouter = require("./routes/resources");
 const { httpSemantics } = require("./middleware/http-semantics");
+const { createSecurityMiddleware } = require("./middleware/authentication");
 
 function createApp(prisma) {
     const app = express();
     app.disable("etag");
     app.locals.prisma = prisma;
     app.use(httpSemantics);
+    app.use(createSecurityMiddleware(prisma));
     app.use(express.json());
 
     app.get("/", (req, res) => {

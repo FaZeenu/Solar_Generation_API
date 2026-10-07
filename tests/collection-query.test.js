@@ -1,3 +1,4 @@
+const { authenticatedFetch } = require("./helpers/auth");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { once } = require("node:events");
@@ -13,7 +14,7 @@ test("pagination, hierarchy filters and timestamp queries against seeded Postgre
     await once(server, "listening");
     const base = `http://127.0.0.1:${server.address().port}`;
     async function get(path, status = 200) {
-        const response = await fetch(base + path);
+        const response = await authenticatedFetch(base + path);
         assert.equal(response.status, status, path);
         assert.match(response.headers.get("content-type"), /application\/json/);
         return response.json();

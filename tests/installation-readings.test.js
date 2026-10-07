@@ -1,3 +1,4 @@
+const { authenticatedFetch } = require("./helpers/auth");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { once } = require("node:events");
@@ -23,7 +24,7 @@ test("installation composite and reading API (transaction rolled back after test
                 const path = `/installations/${installation.id}`;
                 const latestOrder = [{ timestamp: "desc" }, { id: "desc" }];
                 async function request(url, status = 200, options) {
-                    const response = await fetch(`${base}${url}`, options);
+                    const response = await authenticatedFetch(`${base}${url}`, options);
                     assert.equal(response.status, status, url);
                     assert.match(response.headers.get("content-type"), /application\/json/);
                     return { response, body: await response.json() };
