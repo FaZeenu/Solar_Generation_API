@@ -2,6 +2,7 @@ const express = require("express");
 const createInstallationReadingRouter = require("./installation-readings");
 const { installationFilters, paginatedCollection } = require("./collection-query");
 const registerHierarchyWrites = require("./hierarchy-writes");
+const { districtGenerationSummary } = require("./district-generation-summary");
 
 // Scalar model fields are returned directly; foreign-key IDs link related resources.
 const resources = [
@@ -58,6 +59,7 @@ function createResourceRouter(prisma) {
             });
         }
     }
+    router.get("/districts/:districtId/generation-summary", districtGenerationSummary(prisma));
     router.use("/installations/:installationId", createInstallationReadingRouter(prisma));
     return router;
 }

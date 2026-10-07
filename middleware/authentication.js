@@ -22,11 +22,12 @@ function createSecurityMiddleware(prisma) {
         catch { return res.apiError(400, "Malformed request path."); }
         const hierarchy = /^\/(provinces|districts|substations|installations)(?:\/|$)/.test(path);
         const readingPost = req.method === "POST" && /^\/installations\/[^/]+\/readings\/?$/.test(path);
+        const summaryRead = ["GET", "HEAD"].includes(req.method) && /^\/districts\/[^/]+\/generation-summary\/?$/.test(path);
         const installationRead = ["GET", "HEAD"].includes(req.method) && (
             /^\/installations(?:\/|$)/.test(path) || /^\/substations\/[^/]+\/installations\/?$/.test(path)
         );
         const write = hierarchy && ["POST", "PATCH", "DELETE", "PUT"].includes(req.method);
-        if (!write && !installationRead) return next();
+        if (!write && !installationRead && !summaryRead) return next();
         const header = req.get("Authorization");
         const match = header && /^Bearer ([^\s]+)$/i.exec(header);
         let claims;
@@ -60,6 +61,10 @@ function createSecurityMiddleware(prisma) {
         const district = await prisma.district.findUnique({ where: { id: districtId }, select: { id: true, provinceId: true } });
         if (!district) return forbidden();
         res.locals.authorizedDistrictId = districtId;
+        if (summaryRead) {
+            const rawId = path.split("/")[2];
+            if (/^[1-9]\d*$/.test(rawId) && validId(Number(rawId)) && Number(rawId) !== districtId) return forbidden();
+        }
         const scoped = /^\/substations\/([1-9]\d*)\/installations\/?$/.exec(path);
         if (scoped) {
             const id = Number(scoped[1]);
