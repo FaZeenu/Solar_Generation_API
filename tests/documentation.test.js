@@ -69,7 +69,7 @@ test("minimal OpenAPI/Swagger infrastructure", async t => {
         assert.equal(document.info.version, version);
         assert.equal(typeof document.info.description, "string");
         assert(document.info.description.length > 0);
-        assert.equal(Object.keys(document.paths).length, 15);
+        assert.equal(Object.keys(document.paths).length, 16);
     });
     await t.test("Swagger assets are served and the UI loads /openapi.json", async () => {
         const css = await fetch(`${base}/api-docs/swagger-ui.css`, { headers: { Accept: "text/css" } });
@@ -81,6 +81,104 @@ test("minimal OpenAPI/Swagger infrastructure", async t => {
     });
 });
 
+test("final OpenAPI coursework route and HTTP consistency audit", async t => {
+    await t.test("exactly 29 implemented operations on 16 resource paths; no duplicate or nonexistent operations", () => {
+        const matrix = {};
+        for (const [path, id] of [["provinces", "provinceId"], ["districts", "districtId"], ["substations", "substationId"], ["installations", "installationId"]]) {
+            matrix[`/${path}`] = ["get", "post"];
+            matrix[`/${path}/{${id}}`] = ["get", "patch", "delete"];
+        }
+        for (const path of ["/provinces/{provinceId}/districts", "/districts/{districtId}/substations", "/substations/{substationId}/installations", "/installations/{installationId}/composite", "/installations/{installationId}/last-known-reading", "/installations/{installationId}/readings/{readingId}", "/districts/{districtId}/generation-summary"]) matrix[path] = ["get"];
+        matrix["/installations/{installationId}/readings"] = ["get", "post"];
+        assert.deepEqual(Object.keys(document.paths).sort(), Object.keys(matrix).sort());
+        const signatures = [];
+        for (const [path, methods] of Object.entries(matrix)) {
+            assert.deepEqual(Object.keys(document.paths[path]).sort(), [...methods].sort());
+            signatures.push(...methods.map(method => `${method} ${path}`));
+        }
+        assert.equal(signatures.length, 29); assert.equal(new Set(signatures).size, 29);
+    });
+    await t.test("all references resolve, all path parameters match templates, and examples match schemas", () => {
+        function walk(value) {
+            if (!value || typeof value !== "object") return;
+            if (value.$ref) assert(resolve(value), value.$ref);
+            for (const nested of Object.values(value)) walk(nested);
+        }
+        walk(document);
+        for (const [path, item] of Object.entries(document.paths)) {
+            for (const operation of Object.values(item)) {
+                const parameters = operation.parameters.map(resolve);
+                assert.equal(new Set(parameters.map(p => `${p.in}:${p.name}`)).size, parameters.length);
+                assert.deepEqual(parameters.filter(p => p.in === "path").map(p => p.name), [...path.matchAll(/\{([^}]+)\}/g)].map(match => match[1]));
+                for (const raw of Object.values(operation.responses)) {
+                    const response = resolve(raw);
+                    if (response.content) {
+                        const media = response.content["application/json"];
+                        validate(media.example, media.schema);
+                    }
+                }
+            }
+        }
+    });
+    await t.test("GET validators/304/412 and write Location/ETag/cache headers are documented", () => {
+        for (const item of Object.values(document.paths)) {
+            for (const [method, operation] of Object.entries(item)) {
+                assert(operation.responses[500]);
+                if (method === "get") {
+                    assert(operation.responses[200].headers.ETag); assert(operation.responses[200].headers.Vary);
+                    assert(operation.responses[200].headers["Cache-Control"]);
+                    assert(operation.parameters.map(resolve).some(p => p.name === "If-None-Match"));
+                    assert(operation.responses[304]); assert(!operation.responses[304].content);
+                    assert(operation.responses[412]); assert(!operation.responses[200].headers["Last-Modified"]);
+                } else {
+                    if (method === "post") assert(operation.responses[201].headers.Location);
+                    if (method === "patch") assert(operation.responses[200].headers.ETag);
+                    if (method === "delete") { assert(operation.responses[204]); assert(!operation.responses[204].content); }
+                    if (["post", "patch"].includes(method)) assert(operation.responses[413]);
+                }
+            }
+        }
+    });
+    await t.test("summary has the actual fields, nullable source times and JWT requirements", () => {
+        const schema = document.components.schemas.DistrictGenerationSummary;
+        validate(schema.example, schema);
+        validate({ ...schema.example, context: { ...schema.example.context, oldestLatestReadingAt: null, latestReadingAt: null } }, schema);
+        assert.deepEqual(Object.keys(schema.properties), ["district", "installationCount", "currentTotalPowerKw", "todayTotalEnergyKwh", "coverage", "context"]);
+        const operation = document.paths["/districts/{districtId}/generation-summary"].get;
+        assert.deepEqual(operation.security, [{ BearerAuth: [] }]);
+        assert.deepEqual(operation["x-required-scopes"], ["analyst-read-by-district", "hierarchy-admin"]);
+        for (const status of [200, 304, 400, 401, 403, 404, 406, 412, 500]) assert(operation.responses[status]);
+    });
+});
+
+test("summary schema, authorization and validators match actual seeded responses", async t => {
+    const { token } = require("./helpers/auth");
+    const prisma = require("../prisma/client");
+    const district = await prisma.district.findFirst();
+    const other = await prisma.district.findFirst({ where: { id: { not: district.id } } });
+    const server = createApp(prisma).listen(0, "127.0.0.1");
+    t.after(async () => { await new Promise(resolve => server.close(resolve)); await prisma.$disconnect(); });
+    await once(server, "listening");
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    const path = `/districts/${district.id}/generation-summary`;
+    const operation = document.paths["/districts/{districtId}/generation-summary"].get;
+    const authorization = { Authorization: `Bearer ${token({ scope: "analyst-read-by-district", districtId: district.id })}` };
+    const response = await fetch(origin + path, { headers: authorization });
+    assert.equal(response.status, 200);
+    validate(await response.json(), operation.responses[200].content["application/json"].schema);
+    assert.equal(response.headers.get("cache-control"), operation.responses[200].headers["Cache-Control"].example);
+    const cached = await fetch(origin + path, { headers: { ...authorization, "If-None-Match": response.headers.get("etag") } });
+    assert.equal(cached.status, 304); assert.equal(await cached.text(), "");
+    for (const [url, status, headers] of [[path, 401, {}], [`/districts/${other.id}/generation-summary`, 403, authorization], ["/districts/abc/generation-summary", 400, { Authorization: `Bearer ${token({ scope: "hierarchy-admin" })}` }]]) {
+        const result = await fetch(origin + url, { headers });
+        assert.equal(result.status, status);
+        validate(await result.json(), resolve(operation.responses[status]).content["application/json"].schema);
+    }
+    const missing = await authenticatedFetch(origin + "/districts/2147483647/generation-summary");
+    assert.equal(missing.status, 404);
+    validate(await missing.json(), operation.responses[404].content["application/json"].schema);
+});
+
 test("OpenAPI JWT security contract", async t => {
     await t.test("HTTP Bearer JWT scheme describes scopes and identity/jurisdiction claims", () => {
         const scheme = document.components.securitySchemes.BearerAuth;
@@ -88,13 +186,13 @@ test("OpenAPI JWT security contract", async t => {
         for (const value of ["installation-write", "analyst-read-by-district", "hierarchy-admin", "installationId", "districtId", "sub", "exp"]) assert(scheme.description.includes(value));
         assert(!scheme.flows); assert(!scheme.example);
     });
-    await t.test("all 20 protected operations have Bearer requirements and shared 401/403 responses", () => {
+    await t.test("all 21 protected operations have Bearer requirements and shared 401/403 responses", () => {
         let protectedCount = 0;
         for (const [path, item] of Object.entries(document.paths)) {
             for (const [method, operation] of Object.entries(item)) {
                 const ingestion = path === "/installations/{installationId}/readings" && method === "post";
                 const write = ["post", "patch", "delete"].includes(method);
-                const read = method === "get" && (path.startsWith("/installations") || path === "/substations/{substationId}/installations");
+                const read = method === "get" && (path.startsWith("/installations") || path === "/substations/{substationId}/installations" || path === "/districts/{districtId}/generation-summary");
                 if (!write && !read) continue;
                 protectedCount++;
                 assert.deepEqual(operation.security, [{ BearerAuth: [] }]);
@@ -104,19 +202,19 @@ test("OpenAPI JWT security contract", async t => {
                 assert.equal(operation["x-scope-match"], "any");
             }
         }
-        assert.equal(protectedCount, 20);
+        assert.equal(protectedCount, 21);
     });
-    await t.test("all eight public geographic GET operations remain public; summary remains absent", () => {
+    await t.test("all eight public geographic GET operations remain public; summary included", () => {
         assert(!document.security);
         let publicCount = 0;
         for (const [path, item] of Object.entries(document.paths)) {
-            if (!item.get || path.startsWith("/installations") || path === "/substations/{substationId}/installations") continue;
+            if (!item.get || path.startsWith("/installations") || path === "/substations/{substationId}/installations" || path === "/districts/{districtId}/generation-summary") continue;
             publicCount++;
             assert.deepEqual(item.get.security, []);
             assert(!item.get.responses[401]); assert(!item.get.responses[403]);
         }
         assert.equal(publicCount, 8);
-        assert(!Object.keys(document.paths).some(path => path.includes("generation-summary")));
+        assert(document.paths["/districts/{districtId}/generation-summary"].get);
     });
     await t.test("401/403 examples reuse Error and include the real bearer challenge", () => {
         for (const name of ["Unauthorized", "Forbidden"]) {
@@ -186,9 +284,9 @@ test("OpenAPI hierarchy write contracts", async t => {
             }
         });
     }
-    await t.test("security documented, summary excluded; readings remain append-only", () => {
+    await t.test("security documented, summary included; readings remain append-only", () => {
         assert(!document.security); assert(document.components.securitySchemes.BearerAuth);
-        assert(!Object.keys(document.paths).some(path => path.includes("generation-summary")));
+        assert(document.paths["/districts/{districtId}/generation-summary"].get);
         for (const [path, item] of Object.entries(document.paths)) {
             if (path.includes("readings")) { assert(!item.patch); assert(!item.delete); }
         }
@@ -249,9 +347,9 @@ test("documented hierarchy writes match real responses with rollback-only resour
 });
 
 test("OpenAPI hierarchy GET contract", async t => {
-    await t.test("the 11 hierarchy GET operations remain; summary excluded", () => {
+    await t.test("the 11 hierarchy GET operations remain; summary included", () => {
         for (const path of expectedPaths) assert(document.paths[path].get);
-        assert(!Object.keys(document.paths).some(path => path.includes("generation-summary")));
+        assert(document.paths["/districts/{districtId}/generation-summary"].get);
         assert(!document.security); assert(document.components.securitySchemes.BearerAuth);
     });
     await t.test("path parameters are required, typed and complete", () => {
@@ -283,6 +381,7 @@ test("OpenAPI hierarchy GET contract", async t => {
             assert(item.get.responses[200]); assert(item.get.responses[406]);
             if (path.includes("{")) { assert(item.get.responses[400]); assert(item.get.responses[404]); }
             for (const response of Object.values(item.get.responses)) {
+                if (!resolve(response).content) continue;
                 const media = resolve(response).content["application/json"];
                 validate(media.example, media.schema);
             }
@@ -325,7 +424,7 @@ test("OpenAPI installation readings contract", async t => {
         [`${base}/readings`, "get"], [`${base}/readings/{readingId}`, "get"], [`${base}/readings`, "post"],
     ];
     await t.test("only the five new operations are documented with matching parameters and responses", () => {
-        assert.equal(Object.keys(document.paths).length, 15);
+        assert.equal(Object.keys(document.paths).length, 16);
         for (const [path, method] of operations) {
             const operation = document.paths[path][method];
             assert(operation);
@@ -335,6 +434,7 @@ test("OpenAPI installation readings contract", async t => {
             assert(actual.every(parameter => parameter.required && parameter.schema.minimum === 1));
             for (const status of [method === "post" ? 201 : 200, 400, 404, 406]) assert(operation.responses[status]);
             for (const response of Object.values(operation.responses)) {
+                if (!resolve(response).content) continue;
                 const media = resolve(response).content["application/json"];
                 validate(media.example, media.schema);
             }
