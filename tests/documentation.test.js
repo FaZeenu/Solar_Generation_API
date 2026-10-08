@@ -457,6 +457,9 @@ test("OpenAPI installation readings contract", async t => {
         assert.deepEqual(schema.required, ["timestamp", "powerKw", "energyKwh", "voltage"]);
         assert.deepEqual(Object.keys(schema.properties).sort(), ["energyKwh", "installationId", "powerKw", "timestamp", "voltage"]);
         assert.equal(schema.additionalProperties, false);
+        validate(schema.example, schema);
+        assert.equal(schema.example.voltage, 230);
+        assert.equal(media.example.voltage, 230);
         validate(media.example, schema);
         assert.equal(operation.responses[201].headers.Location.example, "/installations/1/readings/100");
     });
